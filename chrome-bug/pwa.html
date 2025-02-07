@@ -5,6 +5,7 @@
     </head>
 <body>
     <button onclick="install()" id="install"  disabled>INSTALL</button>
+    <button onclick="queryPermission()" >CHECK PERMISSION</button>
     <script>
         var p;
         window.addEventListener('beforeinstallprompt', async (e) => {
@@ -18,10 +19,24 @@
         navigator.permissions.query({
             name: 'periodic-background-sync',
         }).then((s) => {
+            console.log(s);
             s.onchange = async () => {
                 console.log("periodic-sync-change");
             };
+        })
+        .catch((e) => {
+            console.error('Error querying periodic-sync permission:', e);
         });
+
+        function queryPermission() {
+            navigator.permissions.query({ name: 'periodic-background-sync' })
+            .then((s) => {
+                console.log(`periodic-background-sync permission status is ${s.state}`);
+            })
+            .catch((e) => {
+                console.error('Error querying periodic-background-sync permission:', e);
+            });
+        }
     </script>
 </body>
 
