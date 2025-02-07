@@ -1,0 +1,28 @@
+<!DOCTYPE HTML>
+<html>
+    <head>
+        <link rel="manifest" href="/chrome-bug/bug.json">
+    </head>
+<body>
+    <button onclick="install()" id="install"  disabled>INSTALL</button>
+    <script>
+        var p;
+        window.addEventListener('beforeinstallprompt', async (e) => {
+            e.preventDefault();
+            p = e;
+            document.querySelector("#install").disabled = false;
+        });
+        function install(){
+            p.prompt();
+        }
+        navigator.permissions.query({
+            name: 'periodic-background-sync',
+        }).then((s) => {
+            s.onchange = async () => {
+                console.log("periodic-sync-change");
+            };
+        });
+    </script>
+</body>
+
+</html>
