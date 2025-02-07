@@ -5,17 +5,22 @@
     </head>
 <body>
     <button onclick="install()" id="install"  disabled>INSTALL</button>
-    <button onclick="queryPermission()" >CHECK PERMISSION</button>
+    <button onclick="queryPBSPermission()" >Get Periodic Background Sync Permission</button>
+    <button onclick="queryBSPermission()" >Get Background Sync Permission</button>
     <script>
+        // Execute if no PWA installed
         var p;
         window.addEventListener('beforeinstallprompt', async (e) => {
             e.preventDefault();
             p = e;
             document.querySelector("#install").disabled = false;
         });
+
         function install(){
             p.prompt();
         }
+
+        // Check periodic-background-sync permission
         navigator.permissions.query({
             name: 'periodic-background-sync',
         }).then((s) => {
@@ -28,13 +33,36 @@
             console.error('Error querying periodic-sync permission:', e);
         });
 
-        function queryPermission() {
+        // check background-sync permission
+        navigator.permissions.query({
+            name: 'background-sync',
+        }).then((s) => {
+            console.log(s);
+            s.onchange = async () => {
+                console.log("background-sync-change");
+            };
+        })
+        .catch((e) => {
+            console.error('Error querying background-sync permission:', e);
+        });
+
+        function queryPBSPermission() {
             navigator.permissions.query({ name: 'periodic-background-sync' })
             .then((s) => {
                 console.log(`periodic-background-sync permission status is ${s.state}`);
             })
             .catch((e) => {
                 console.error('Error querying periodic-background-sync permission:', e);
+            });
+        }
+
+        function queryBSPermission() {
+            navigator.permissions.query({ name: 'background-sync' })
+            .then((s) => {
+                console.log(`background-sync permission status is ${s.state}`);
+            })
+            .catch((e) => {
+                console.error('Error querying background-sync permission:', e);
             });
         }
     </script>
