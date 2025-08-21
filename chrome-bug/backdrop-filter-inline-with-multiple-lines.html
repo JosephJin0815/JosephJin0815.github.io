@@ -3,13 +3,13 @@
 <title>backdrop-filter for inline elements with mutiple lines</title>
 <style>
 body {
-  background: #CC8800;
+  background: #ffa500;
 }
 div {
   margin-bottom: 120px;
 }
 .inline-backdrop-filter {
-  backdrop-filter: invert(100%);
+  backdrop-filter: hue-rotate(90deg);
   padding: 50px;
   border: 1px solid blue;
   display: inline;
@@ -20,6 +20,6 @@ div {
     <span class="inline-backdrop-filter">1</span>
   </div>
   <div>
-  AB <div class="inline-backdrop-filter"><br>line break</div>
+  AB<div class="inline-backdrop-filter"><br>New Line</div>
   </div>
 </body>
