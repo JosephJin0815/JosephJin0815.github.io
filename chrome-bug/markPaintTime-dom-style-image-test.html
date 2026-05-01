@@ -244,7 +244,7 @@ function runTest(type) {
     testId,
     writeTime:          null,  // when DOM mutation completed
     apiStartTime:       null,  // markPaintTime startTime (= performance.now() at call)
-    apiPaintTime:       null,  // markPaintTime paintTime (rendering update end)
+    apiPaintTime:       null,  // markPaintTime paintTime (pre-paint in Chromium)
     apiPresentTime:     null,  // markPaintTime presentationTime (pixels on screen)
     rafSetTimeoutTime:  null,  // rAF + setTimeout(0) callback time
     singleRafTime:      null,  // single rAF callback time
@@ -339,7 +339,29 @@ function renderResults() {
 
     html += `<h3>${typeLabels[data.type]} — ${data.testId}</h3>`;
     html += '<table>';
-    html += '<tr><th>Approach</th><th>Callback / Value (ms)</th><th>Δ from DOM write</th><th>What it measures</th></tr>';
+    html += '<tr><th>Approach</th><th>Callback / Value (ms)</th><th>Δ from DOM write time</th><th>Δ to paintTime</th><th>What it measures</th></tr>';
+
+    // Helper: compute delta-to-paintTime cell
+    const paintDelta = data.apiPaintTime != null ? (data.apiPaintTime - w) : null;
+    function deltaToPaintCell(time) {
+      if (time == null || paintDelta == null) return '<td style="color:#888">—</td>';
+      const d = (time - w) - paintDelta;
+      const label = d >= 0 ? 'after' : 'before';
+      const color = d >= 0 ? '#ffa657' : '#7ee787';
+      return `<td style="color:${color}; font-size:12px">${d >= 0 ? '+' : ''}${d.toFixed(2)}ms (${label})</td>`;
+    }
+
+    // Row: markPaintTime() startTime
+    html += '<tr>';
+    html += '<td class="col-api" style="text-align:left; font-weight:bold; color:#00d4ff">markPaintTime()<br>startTime</td>';
+    if (data.apiStartTime != null) {
+      html += `<td class="col-api">${data.apiStartTime.toFixed(2)}</td>`;
+      html += `<td class="col-api" style="color:#7ee787">${(data.apiStartTime - w).toFixed(2)} ms</td>`;
+    } else {
+      html += '<td class="col-api" colspan="2" style="color:#888">N/A</td>';
+    }
+    html += '<td style="color:#888">—</td>';
+    html += '<td style="text-align:left; color:#888">performance.now() at markPaintTime() call site</td></tr>';
 
     // Row: markPaintTime() paintTime
     html += '<tr>';
@@ -350,7 +372,8 @@ function renderResults() {
     } else {
       html += '<td class="col-api" colspan="2" style="color:#ff7b72">N/A</td>';
     }
-    html += '<td style="text-align:left; color:#888">Exact paint time (rendering update end)</td></tr>';
+    html += '<td style="color:#00d4ff; font-weight:bold">⏱️ baseline</td>';
+    html += '<td style="text-align:left; color:#888">Rendering update end time, right before paint in Chromium</td></tr>';
 
     // Row: markPaintTime() presentationTime
     html += '<tr>';
@@ -361,18 +384,8 @@ function renderResults() {
     } else {
       html += '<td class="col-api" colspan="2" style="color:#888">' + (data.apiPaintTime != null ? 'polling...' : 'N/A') + '</td>';
     }
-    html += '<td style="text-align:left; color:#888">Pixels on screen (compositor)</td></tr>';
-
-    // Row: rAF + setTimeout
-    html += '<tr>';
-    html += '<td class="col-nolan" style="text-align:left; font-weight:bold; color:#d2a8ff">rAF + setTimeout</td>';
-    if (data.rafSetTimeoutTime != null) {
-      html += `<td class="col-nolan">${data.rafSetTimeoutTime.toFixed(2)}</td>`;
-      html += `<td class="col-nolan" style="color:#d2a8ff; font-weight:bold">${(data.rafSetTimeoutTime - w).toFixed(2)} ms</td>`;
-    } else {
-      html += '<td class="col-nolan" colspan="2">pending...</td>';
-    }
-    html += '<td style="text-align:left; color:#888">≈ post-paint (setTimeout clamp adds ~1-4ms)</td></tr>';
+    html += '<td style="color:#888">—</td>';
+    html += '<td style="text-align:left; color:#888">Exact presentation time, actual pixels on screen</td></tr>';
 
     // Row: Single rAF
     html += '<tr>';
@@ -383,7 +396,20 @@ function renderResults() {
     } else {
       html += '<td class="col-raf1" colspan="2">pending...</td>';
     }
-    html += '<td style="text-align:left; color:#888">Before paint (same frame rAF phase)</td></tr>';
+    html += deltaToPaintCell(data.singleRafTime);
+    html += '<td style="text-align:left; color:#888">Before style→layout→paint→... (same frame rAF phase)</td></tr>';
+
+    // Row: rAF + setTimeout
+    html += '<tr>';
+    html += '<td class="col-nolan" style="text-align:left; font-weight:bold; color:#d2a8ff">rAF + setTimeout</td>';
+    if (data.rafSetTimeoutTime != null) {
+      html += `<td class="col-nolan">${data.rafSetTimeoutTime.toFixed(2)}</td>`;
+      html += `<td class="col-nolan" style="color:#d2a8ff; font-weight:bold">${(data.rafSetTimeoutTime - w).toFixed(2)} ms</td>`;
+    } else {
+      html += '<td class="col-nolan" colspan="2">pending...</td>';
+    }
+    html += deltaToPaintCell(data.rafSetTimeoutTime);
+    html += '<td style="text-align:left; color:#888">≈ post-paint approximation</td></tr>';
 
     // Row: Double rAF
     html += '<tr>';
@@ -394,26 +420,10 @@ function renderResults() {
     } else {
       html += '<td class="col-raf2" colspan="2">pending...</td>';
     }
+    html += deltaToPaintCell(data.doubleRafTime);
     html += '<td style="text-align:left; color:#888">Next frame start (~1 vsync late)</td></tr>';
 
     html += '</table>';
-
-    // Error analysis
-    if (data.apiPaintTime != null) {
-      const paintDelta = data.apiPaintTime - w;
-      html += '<div class="box" style="font-size:12px;">';
-      if (data.rafSetTimeoutTime != null) {
-        html += `<span style="color:#d2a8ff">rAF+setTimeout error: +${((data.rafSetTimeoutTime - w) - paintDelta).toFixed(2)}ms</span> `;
-      }
-      if (data.singleRafTime != null) {
-        const err = (data.singleRafTime - w) - paintDelta;
-        html += `<span style="color:#7ee787">| Single rAF error: ${err >= 0 ? '+' : ''}${err.toFixed(2)}ms</span> `;
-      }
-      if (data.doubleRafTime != null) {
-        html += `<span style="color:#f0883e">| Double rAF error: +${((data.doubleRafTime - w) - paintDelta).toFixed(2)}ms</span>`;
-      }
-      html += '</div>';
-    }
   }
 
   // --- Cross-test summary (batch mode) ---
@@ -422,7 +432,7 @@ function renderResults() {
 
     html += '<h2>📋 Cross-Test Summary</h2>';
     html += '<table>';
-    html += '<tr><th>Test</th><th>Δ paintTime</th><th>Δ rAF+setTimeout</th><th>Δ Single rAF</th><th>Δ Double rAF</th><th>rAF+sT error</th></tr>';
+    html += '<tr><th>Test</th><th>Δ paintTime</th><th>Δ rAF+setTimeout</th><th>Δ Single rAF</th><th>Δ Double rAF</th><th>rAF+sT Δ to paintTime</th></tr>';
 
     for (const data of allResults) {
       if (!data.writeTime || !data.apiPaintTime) continue;
@@ -445,7 +455,7 @@ function renderResults() {
     html += '<div class="box">';
     html += '<strong style="color:#00d4ff;">📊 Observations:</strong><br>';
     html += '• <span style="color:#00d4ff">markPaintTime()</span> gives the true paint time for <strong>all update types</strong> — DOM, style, image.<br>';
-    html += '• <span style="color:#d2a8ff">rAF+setTimeout</span> is the best hack but always overshoots due to setTimeout clamp.<br>';
+    html += '• <span style="color:#d2a8ff">rAF+setTimeout</span> is the best hack but always overshoots.<br>';
     html += '• <span style="color:#7ee787">Single rAF</span> fires <strong>before</strong> paint — measures nothing useful for paint timing.<br>';
     html += '• <span style="color:#f0883e">Double rAF</span> fires next frame — ~16ms overshoot regardless of actual paint cost.<br>';
     html += '• For <strong>image</strong> changes, rAF tricks are especially unreliable since decode + paint is async.';
