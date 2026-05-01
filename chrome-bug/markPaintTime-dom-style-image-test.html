@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>markPaintTime() vs rAF Techniques — DOM / Style / Image Comparison</title>
+<style>
+  body { font-family: monospace; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
+  h1 { color: #00d4ff; }
+  h2 { color: #ff6b6b; margin-top: 30px; }
+  h3 { color: #d2a8ff; margin-top: 20px; }
+  button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 6px;
+           font-size: 14px; font-weight: bold; }
+  .test-btn { background: #00d4ff; color: #1a1a2e; }
+  .test-btn:hover { background: #00b8d4; }
+  .reset-btn { background: #ff6b6b; color: #fff; }
+  table { border-collapse: collapse; width: 100%; margin-top: 15px; font-size: 13px; }
+  th, td { border: 1px solid #30363d; padding: 7px 10px; text-align: right; }
+  th { background: #21262d; color: #00d4ff; text-align: center; }
+  .col-api { background: rgba(0,212,255,0.08); }
+  .col-nolan { background: rgba(210,168,255,0.08); }
+  .col-raf1 { background: rgba(126,231,135,0.08); }
+  .col-raf2 { background: rgba(240,136,62,0.08); }
+  .box { margin-top: 15px; padding: 12px; background: #21262d; border-radius: 8px; font-size: 13px; }
+  code { background: #30363d; padding: 2px 6px; border-radius: 4px; }
+  .demo-box { width: 200px; height: 120px; border-radius: 12px; display: flex; align-items: center;
+              justify-content: center; font-size: 18px; font-weight: bold; transition: none;
+              border: 3px solid #30363d; margin: 15px 0; }
+  .demo-img { width: 300px; height: 200px; border-radius: 12px; border: 3px solid #30363d;
+              margin: 15px 0; object-fit: cover; background: #30363d; }
+  #results { margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<h1>🎯 markPaintTime() vs rAF Techniques</h1>
+<p>Compare <strong>4 approaches</strong> to measuring paint time across different update types: DOM content, CSS style, and image source changes.</p>
+<p>Launch Chrome with: <code>--enable-features=PerformanceMarkPaintTime</code></p>
+
+<div style="display:flex; gap:10px; flex-wrap:wrap; margin:15px 0;">
+  <button class="test-btn" onclick="runTest('dom')">📝 DOM Text Update</button>
+  <button class="test-btn" onclick="runTest('style')" style="background:#7ee787; color:#1a1a2e">🎨 Style Change</button>
+  <button class="test-btn" onclick="runTest('image')" style="background:#d2a8ff; color:#1a1a2e">🖼️ Image Source Change</button>
+  <button class="test-btn" onclick="runTest('heavy')" style="background:#f0883e; color:#1a1a2e">🏋️ Heavy DOM (500 elements)</button>
+  <button class="test-btn" onclick="runAllTests()" style="background:#ff6b6b; color:#fff">🔄 Run All Tests</button>
+  <button class="reset-btn" onclick="resetAll()">🗑️ Reset</button>
+</div>
+
+<h2>Test Elements</h2>
+<div style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;">
+  <div>
+    <div class="demo-box" id="demo-box" style="background:#30363d; color:#888;">
+      Waiting...
+    </div>
+    <div style="color:#888; font-size:12px;">DOM / Style target</div>
+  </div>
+  <div>
+    <img class="demo-img" id="demo-img" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='200'%3E%3Crect fill='%2330363d' width='300' height='200'/%3E%3Ctext fill='%23888' x='150' y='100' text-anchor='middle' dy='.3em' font-family='monospace'%3EWaiting...%3C/text%3E%3C/svg%3E" />
+    <div style="color:#888; font-size:12px;">Image target</div>
+  </div>
+</div>
+
+<div id="results"></div>
+
+<script>
+// ============================================================================
+//  CONFIGURATION
+// ============================================================================
+const demoBox  = document.getElementById('demo-box');
+const demoImg  = document.getElementById('demo-img');
+const resultsEl = document.getElementById('results');
+
+const COLORS = ['#ff6b6b', '#7ee787', '#d2a8ff', '#f0883e', '#00d4ff'];
+const LABELS = ['Fire 🔥', 'Nature 🌿', 'Galaxy 🌌', 'Sunset 🌅', 'Ocean 🌊'];
+const IMAGE_URLS = [
+  'https://picsum.photos/300/200?random=1',
+  'https://picsum.photos/300/200?random=2',
+  'https://picsum.photos/300/200?random=3',
+  'https://picsum.photos/300/200?random=4',
+  'https://picsum.photos/300/200?random=5',
+];
+
+let testCounter = 0;
+let colorIdx    = 0;
+let imgIdx      = 0;
+let batchMode   = false;
+const allResults = [];
+
+// Check API availability
+if (typeof performance.markPaintTime !== 'function') {
+  resultsEl.innerHTML = '<p style="color:#ff7b72">❌ performance.markPaintTime() not available. Use --enable-features=PerformanceMarkPaintTime</p>';
+}
+
+// ============================================================================
+//  RESET
+// ============================================================================
+function resetAll() {
+  allResults.length = 0;
+  resultsEl.innerHTML = '';
+  demoBox.style.background = '#30363d';
+  demoBox.style.color = '#888';
+  demoBox.style.transform = '';
+  demoBox.style.borderRadius = '12px';
+  demoBox.style.borderColor = '#30363d';
+  demoBox.innerHTML = 'Waiting...';
+  demoImg.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='200'%3E%3Crect fill='%2330363d' width='300' height='200'/%3E%3Ctext fill='%23888' x='150' y='100' text-anchor='middle' dy='.3em' font-family='monospace'%3EWaiting...%3C/text%3E%3C/svg%3E";
+}
+
+// ============================================================================
+//  DOM UPDATE FUNCTIONS — one per test type
+//  Each returns writeTime after performing the DOM mutation.
+// ============================================================================
+
+function doDomUpdate() {
+  colorIdx = (colorIdx + 1) % COLORS.length;
+  demoBox.innerHTML = `<div>${LABELS[colorIdx]}</div><div style="font-size:11px; margin-top:4px;">Test #${testCounter}</div>`;
+  demoBox.style.background = COLORS[colorIdx];
+  demoBox.style.color = '#fff';
+  demoBox.offsetHeight;                    // force style recalc + layout
+  return performance.now();                // writeTime
+}
+
+function doStyleUpdate() {
+  colorIdx = (colorIdx + 1) % COLORS.length;
+  demoBox.style.background   = COLORS[colorIdx];
+  demoBox.style.borderColor  = COLORS[(colorIdx + 2) % COLORS.length];
+  demoBox.style.transform    = `rotate(${testCounter * 15 % 360}deg)`;
+  demoBox.style.borderRadius = `${12 + testCounter * 5}px`;
+  demoBox.offsetHeight;                    // force style recalc + layout
+  return performance.now();                // writeTime
+}
+
+function doHeavyDomUpdate() {
+  let html = '<div style="display:flex; flex-wrap:wrap; gap:1px;">';
+  for (let i = 0; i < 500; i++) {
+    const hue = (i * 360 / 500 + testCounter * 30) | 0;
+    html += `<div style="width:6px; height:6px; background:hsl(${hue},70%,50%);"></div>`;
+  }
+  html += '</div>';
+  demoBox.innerHTML = html;
+  demoBox.style.background = '#1a1a2e';
+  demoBox.offsetHeight;                    // force style recalc + layout
+  return performance.now();                // writeTime
+}
+
+// ============================================================================
+//  MEASUREMENT HELPERS
+//  These are the 4 approaches being compared.
+// ============================================================================
+
+/**
+ * Approach 1: performance.markPaintTime()  — proposed API
+ * Returns precise paintTime + presentationTime via PerformanceObserver.
+ */
+function observeMarkPaintTime(testId, data) {
+  if (typeof performance.markPaintTime !== 'function') return;
+
+  let mptEntry = null;
+  const obs = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      if (entry.name !== testId) continue;
+      mptEntry = entry;
+      data.apiStartTime   = entry.startTime;
+      data.apiPaintTime   = entry.paintTime;
+      data.apiPresentTime = entry.presentationTime;
+      obs.disconnect();
+      renderResults();
+
+      // presentationTime arrives asynchronously from compositor — poll for it
+      if (entry.presentationTime == null) {
+        const poll = setInterval(() => {
+          if (mptEntry.presentationTime != null) {
+            data.apiPresentTime = mptEntry.presentationTime;
+            renderResults();
+            clearInterval(poll);
+          }
+        }, 50);
+        setTimeout(() => clearInterval(poll), 3000);
+      }
+    }
+  });
+  obs.observe({ type: 'mark-paint-time' });
+}
+
+function callMarkPaintTime(testId) {
+  if (typeof performance.markPaintTime === 'function') {
+    performance.markPaintTime(testId);
+  }
+}
+
+/**
+ * Approach 2: rAF + setTimeout(0)
+ * setTimeout fires after current frame's Style/Layout/Paint.
+ */
+function measureRafSetTimeout(data) {
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      data.rafSetTimeoutTime = performance.now();
+      renderResults();
+    }, 0);
+  });
+}
+
+/**
+ * Approach 3: Single requestAnimationFrame
+ * Fires before paint (same frame's rAF phase). Useless for paint timing.
+ */
+function measureSingleRaf(data) {
+  requestAnimationFrame(() => {
+    data.singleRafTime = performance.now();
+    renderResults();
+  });
+}
+
+/**
+ * Approach 4: Double requestAnimationFrame (nested)
+ * Fires at the start of the NEXT frame (~1 vsync late).
+ */
+function measureDoubleRaf(data) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      data.doubleRafTime = performance.now();
+      renderResults();
+    });
+  });
+}
+
+/** Start all 4 measurement approaches for a given test. */
+function startAllMeasurements(testId, data) {
+  callMarkPaintTime(testId);       // Approach 1
+  measureRafSetTimeout(data);      // Approach 2
+  measureSingleRaf(data);          // Approach 3
+  measureDoubleRaf(data);          // Approach 4
+}
+
+// ============================================================================
+//  TEST RUNNER
+// ============================================================================
+
+function runTest(type) {
+  testCounter++;
+  const testId = `${type}-${testCounter}`;
+
+  const data = {
+    type,
+    testId,
+    writeTime:          null,  // when DOM mutation completed
+    apiStartTime:       null,  // markPaintTime startTime (= performance.now() at call)
+    apiPaintTime:       null,  // markPaintTime paintTime (rendering update end)
+    apiPresentTime:     null,  // markPaintTime presentationTime (pixels on screen)
+    rafSetTimeoutTime:  null,  // rAF + setTimeout(0) callback time
+    singleRafTime:      null,  // single rAF callback time
+    doubleRafTime:      null,  // double rAF callback time
+  };
+
+  // Clear previous results for independent measurement (skip in batch mode)
+  if (!batchMode) {
+    allResults.length = 0;
+    resultsEl.innerHTML = '';
+  }
+
+  // Set up markPaintTime observer BEFORE the DOM update
+  observeMarkPaintTime(testId, data);
+
+  // --- Perform the DOM update ---
+  if (type === 'image') {
+    runImageTest(testId, data);
+    return;
+  }
+
+  switch (type) {
+    case 'dom':   data.writeTime = doDomUpdate();      break;
+    case 'style': data.writeTime = doStyleUpdate();     break;
+    case 'heavy': data.writeTime = doHeavyDomUpdate();  break;
+  }
+
+  // --- Start all 4 measurement approaches ---
+  startAllMeasurements(testId, data);
+
+  allResults.push(data);
+}
+
+/** Image test is async (must wait for image load before measuring). */
+function runImageTest(testId, data) {
+  imgIdx = (imgIdx + 1) % IMAGE_URLS.length;
+  const url = IMAGE_URLS[imgIdx] + '&t=' + Date.now();
+
+  const img = new Image();
+
+  img.onload = () => {
+    demoImg.src = img.src;
+    demoImg.offsetHeight;
+    data.writeTime = performance.now();
+
+    startAllMeasurements(testId, data);
+  };
+
+  img.onerror = () => {
+    // Fallback: generate SVG data URL
+    const hue = (testCounter * 60) % 360;
+    demoImg.src = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='200'%3E%3Crect fill='hsl(${hue},70%25,50%25)' width='300' height='200'/%3E%3Ctext fill='white' x='150' y='100' text-anchor='middle' dy='.3em' font-family='monospace' font-size='20'%3EImage %23${testCounter}%3C/text%3E%3C/svg%3E`;
+    demoImg.offsetHeight;
+    data.writeTime = performance.now();
+
+    startAllMeasurements(testId, data);
+  };
+
+  img.src = url;
+  allResults.push(data);
+}
+
+function runAllTests() {
+  resetAll();
+  batchMode = true;
+  runTest('dom');
+  setTimeout(() => runTest('style'), 200);
+  setTimeout(() => runTest('heavy'), 400);
+  setTimeout(() => { runTest('image'); batchMode = false; }, 600);
+}
+
+// ============================================================================
+//  RENDER RESULTS
+// ============================================================================
+
+function renderResults() {
+  if (allResults.length === 0) return;
+
+  let html = '<h2>📊 Results</h2>';
+
+  const typeLabels = {
+    dom:   '📝 DOM Text Update',
+    style: '🎨 Style Change',
+    image: '🖼️ Image Source Change',
+    heavy: '🏋️ Heavy DOM (500 elements)',
+  };
+
+  // --- Per-test result tables ---
+  for (const data of allResults) {
+    const w = data.writeTime;
+    if (!w) continue;
+
+    html += `<h3>${typeLabels[data.type]} — ${data.testId}</h3>`;
+    html += '<table>';
+    html += '<tr><th>Approach</th><th>Callback / Value (ms)</th><th>Δ from DOM write</th><th>What it measures</th></tr>';
+
+    // Row: markPaintTime() paintTime
+    html += '<tr>';
+    html += '<td class="col-api" style="text-align:left; font-weight:bold; color:#00d4ff">markPaintTime()<br>paintTime</td>';
+    if (data.apiPaintTime != null) {
+      html += `<td class="col-api">${data.apiPaintTime.toFixed(2)}</td>`;
+      html += `<td class="col-api" style="color:#7ee787; font-weight:bold">${(data.apiPaintTime - w).toFixed(2)} ms</td>`;
+    } else {
+      html += '<td class="col-api" colspan="2" style="color:#ff7b72">N/A</td>';
+    }
+    html += '<td style="text-align:left; color:#888">Exact paint time (rendering update end)</td></tr>';
+
+    // Row: markPaintTime() presentationTime
+    html += '<tr>';
+    html += '<td class="col-api" style="text-align:left; font-weight:bold; color:#00d4ff">markPaintTime()<br>presentationTime</td>';
+    if (data.apiPresentTime != null) {
+      html += `<td class="col-api">${data.apiPresentTime.toFixed(2)}</td>`;
+      html += `<td class="col-api" style="color:#7ee787; font-weight:bold">${(data.apiPresentTime - w).toFixed(2)} ms</td>`;
+    } else {
+      html += '<td class="col-api" colspan="2" style="color:#888">' + (data.apiPaintTime != null ? 'polling...' : 'N/A') + '</td>';
+    }
+    html += '<td style="text-align:left; color:#888">Pixels on screen (compositor)</td></tr>';
+
+    // Row: rAF + setTimeout
+    html += '<tr>';
+    html += '<td class="col-nolan" style="text-align:left; font-weight:bold; color:#d2a8ff">rAF + setTimeout</td>';
+    if (data.rafSetTimeoutTime != null) {
+      html += `<td class="col-nolan">${data.rafSetTimeoutTime.toFixed(2)}</td>`;
+      html += `<td class="col-nolan" style="color:#d2a8ff; font-weight:bold">${(data.rafSetTimeoutTime - w).toFixed(2)} ms</td>`;
+    } else {
+      html += '<td class="col-nolan" colspan="2">pending...</td>';
+    }
+    html += '<td style="text-align:left; color:#888">≈ post-paint (setTimeout clamp adds ~1-4ms)</td></tr>';
+
+    // Row: Single rAF
+    html += '<tr>';
+    html += '<td class="col-raf1" style="text-align:left; font-weight:bold; color:#7ee787">Single rAF</td>';
+    if (data.singleRafTime != null) {
+      html += `<td class="col-raf1">${data.singleRafTime.toFixed(2)}</td>`;
+      html += `<td class="col-raf1" style="font-weight:bold">${(data.singleRafTime - w).toFixed(2)} ms</td>`;
+    } else {
+      html += '<td class="col-raf1" colspan="2">pending...</td>';
+    }
+    html += '<td style="text-align:left; color:#888">Before paint (same frame rAF phase)</td></tr>';
+
+    // Row: Double rAF
+    html += '<tr>';
+    html += '<td class="col-raf2" style="text-align:left; font-weight:bold; color:#f0883e">Double rAF</td>';
+    if (data.doubleRafTime != null) {
+      html += `<td class="col-raf2">${data.doubleRafTime.toFixed(2)}</td>`;
+      html += `<td class="col-raf2" style="font-weight:bold">${(data.doubleRafTime - w).toFixed(2)} ms</td>`;
+    } else {
+      html += '<td class="col-raf2" colspan="2">pending...</td>';
+    }
+    html += '<td style="text-align:left; color:#888">Next frame start (~1 vsync late)</td></tr>';
+
+    html += '</table>';
+
+    // Error analysis
+    if (data.apiPaintTime != null) {
+      const paintDelta = data.apiPaintTime - w;
+      html += '<div class="box" style="font-size:12px;">';
+      if (data.rafSetTimeoutTime != null) {
+        html += `<span style="color:#d2a8ff">rAF+setTimeout error: +${((data.rafSetTimeoutTime - w) - paintDelta).toFixed(2)}ms</span> `;
+      }
+      if (data.singleRafTime != null) {
+        const err = (data.singleRafTime - w) - paintDelta;
+        html += `<span style="color:#7ee787">| Single rAF error: ${err >= 0 ? '+' : ''}${err.toFixed(2)}ms</span> `;
+      }
+      if (data.doubleRafTime != null) {
+        html += `<span style="color:#f0883e">| Double rAF error: +${((data.doubleRafTime - w) - paintDelta).toFixed(2)}ms</span>`;
+      }
+      html += '</div>';
+    }
+  }
+
+  // --- Cross-test summary (batch mode) ---
+  if (allResults.length > 1 && allResults.some(d => d.apiPaintTime != null)) {
+    const typeShort = { dom: '📝 DOM', style: '🎨 Style', image: '🖼️ Image', heavy: '🏋️ Heavy' };
+
+    html += '<h2>📋 Cross-Test Summary</h2>';
+    html += '<table>';
+    html += '<tr><th>Test</th><th>Δ paintTime</th><th>Δ rAF+setTimeout</th><th>Δ Single rAF</th><th>Δ Double rAF</th><th>rAF+sT error</th></tr>';
+
+    for (const data of allResults) {
+      if (!data.writeTime || !data.apiPaintTime) continue;
+      const w  = data.writeTime;
+      const pt = data.apiPaintTime - w;
+
+      html += '<tr>';
+      html += `<td style="text-align:left; font-weight:bold">${typeShort[data.type]}</td>`;
+      html += `<td class="col-api" style="color:#00d4ff; font-weight:bold">${pt.toFixed(2)}</td>`;
+      html += `<td class="col-nolan">${data.rafSetTimeoutTime ? (data.rafSetTimeoutTime - w).toFixed(2) : '—'}</td>`;
+      html += `<td class="col-raf1">${data.singleRafTime ? (data.singleRafTime - w).toFixed(2) : '—'}</td>`;
+      html += `<td class="col-raf2">${data.doubleRafTime ? (data.doubleRafTime - w).toFixed(2) : '—'}</td>`;
+      html += data.rafSetTimeoutTime
+        ? `<td style="color:#d2a8ff; font-weight:bold">+${((data.rafSetTimeoutTime - w) - pt).toFixed(2)}ms</td>`
+        : '<td>—</td>';
+      html += '</tr>';
+    }
+    html += '</table>';
+
+    html += '<div class="box">';
+    html += '<strong style="color:#00d4ff;">📊 Observations:</strong><br>';
+    html += '• <span style="color:#00d4ff">markPaintTime()</span> gives the true paint time for <strong>all update types</strong> — DOM, style, image.<br>';
+    html += '• <span style="color:#d2a8ff">rAF+setTimeout</span> is the best hack but always overshoots due to setTimeout clamp.<br>';
+    html += '• <span style="color:#7ee787">Single rAF</span> fires <strong>before</strong> paint — measures nothing useful for paint timing.<br>';
+    html += '• <span style="color:#f0883e">Double rAF</span> fires next frame — ~16ms overshoot regardless of actual paint cost.<br>';
+    html += '• For <strong>image</strong> changes, rAF tricks are especially unreliable since decode + paint is async.';
+    html += '</div>';
+  }
+
+  resultsEl.innerHTML = html;
+}
+</script>
+
+</body>
+</html>
