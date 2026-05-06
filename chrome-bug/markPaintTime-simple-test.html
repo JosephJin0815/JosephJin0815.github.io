@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>markPaintTime() Simple Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; }
+    #box { padding: 20px; font-size: 18px; min-height: 40px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 16px; }
+    .buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    button { padding: 8px 16px; font-size: 14px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px; background: #f5f5f5; }
+    button:hover { background: #e0e0e0; }
+    .desc { font-size: 12px; color: #666; border-left: 3px solid #ddd; padding: 8px 12px; margin: 4px 0; }
+    .desc b { color: #333; }
+    .tests { display: flex; flex-direction: column; gap: 4px; }
+    #output { margin-top: 16px; font: 12px/1.5 monospace; border: 1px solid #ddd; border-radius: 6px; padding: 12px; max-height: 400px; overflow-y: auto; white-space: pre; }
+    #output .header { color: #2070c0; font-weight: bold; }
+    #output .highlight { color: #1a8a6a; }
+  </style>
+</head>
+<body>
+  <h3 style="margin:0 0 16px;">markPaintTime() Test</h3>
+  <div id="box">Hello</div>
+  <div class="buttons">
+    <button onclick="runTest('dom')">DOM Update</button>
+    <button onclick="runTest('style')">Style Change</button>
+    <button onclick="runTest('image')">Image Change</button>
+    <button onclick="runTest('io')">ResizeObserver + Heavy Callback</button>
+    <button onclick="runTest('queue')">Queued Tasks</button>
+  </div>
+  <div class="tests">
+    <div class="desc"><b>DOM Update</b> — Changes text + background. Baseline test.</div>
+    <div class="desc"><b>Style Change</b> — border-radius, transform, border. Style-only, no DOM mutation.</div>
+    <div class="desc"><b>Image Change</b> — Swaps &lt;img&gt; src. Triggers image decode + paint.</div>
+    <div class="desc"><b>ResizeObserver + Heavy Callback</b> — ResizeObserver burns 50ms <i>after</i> rAF but <i>before</i> paint. rAF misses it; paintTime catches it.</div>
+    <div class="desc"><b>Queued Tasks</b> — Simulates production: analytics, WebSocket handlers, and 3P scripts queue macrotasks after paint. rAF+setTimeout is inflated ~100ms; paintTime unaffected.</div>
+  </div>
+  <div id="output"></div>
+
+  <script>
+  // ============================================================
+  //  STATE
+  // ============================================================
+  const box  = document.getElementById('box');
+  let count  = 0;        // test counter
+  let writeT = 0;        // performance.now() right after DOM/style write
+  let name   = '';       // current markPaintTime label
+  let raf    = {};       // captured rAF timestamps
+
+  // ============================================================
+  //  LOGGING HELPER
+  // ============================================================
+  const output = document.getElementById('output');
+  function logToPage(text, cls) {
+    const line = document.createElement('span');
+    if (cls) line.className = cls;
+    line.textContent = text + '\n';
+    output.appendChild(line);
+    output.scrollTop = output.scrollHeight;
+  }
+
+  function log(label, time, paintTime) {
+    let msg = label.padEnd(38) + time.toFixed(2) + '  Δ: ' + (time - writeT).toFixed(2) + ' ms';
+    if (paintTime !== undefined) {
+      const d = time - paintTime;
+      msg += '  | Δ to paintTime: ' + d.toFixed(2) + 'ms (' + (d < 0 ? 'before' : 'after') + ')';
+    }
+    console.log(msg);
+    const isMarkPaintTime = label.includes('markPaintTime');
+    logToPage(msg, isMarkPaintTime ? 'highlight' : '');
+  }
+
+  // ============================================================
+  //  OBSERVER  (created once — logs results when paintTime arrives)
+  // ============================================================
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      if (entry.name !== name) continue;
+      const pt = entry.paintTime;
+
+      // markPaintTime results
+      log('markPaintTime  startTime:',        entry.startTime);
+      log('markPaintTime  paintTime: ⏱️',     pt);
+
+      // rAF results (with Δ to paintTime)
+      if (raf.single)     log('Single rAF:',       raf.single,     pt);
+      if (raf.setTimeout) log('rAF + setTimeout:',  raf.setTimeout, pt);
+      if (raf.double)     log('Double rAF:',        raf.double,     pt);
+
+      // presentationTime is already available — the observer fires after
+      // GPU presentation feedback arrives (same callback as paintTime).
+      log('markPaintTime  presentationTime:', entry.presentationTime);
+    }
+  }).observe({ type: 'mark-paint-time' });
+
+  // ============================================================
+  //  DOM UPDATE
+  // ============================================================
+  function doDomUpdate() {
+    count++;
+    box.textContent      = 'DOM Update #' + count;
+    box.style.background = count % 2 ? '#3a86ff' : '#ff006e';
+    box.style.color      = '#fff';
+  }
+
+  // ============================================================
+  //  STYLE CHANGE
+  // ============================================================
+  function doStyleChange() {
+    count++;
+    box.style.background   = count % 2 ? '#e63946' : '#2a9d8f';
+    box.style.borderRadius = (count * 10 % 50) + 'px';
+    box.style.transform    = 'rotate(' + (count * 15 % 360) + 'deg)';
+    box.style.border       = '3px solid ' + (count % 2 ? '#f1faee' : '#264653');
+  }
+
+  // ============================================================
+  //  IMAGE CHANGE — swap <img> src to trigger a paint
+  // ============================================================
+  const img = document.createElement('img');
+  img.style.cssText = 'display:none; margin-top:10px; width:200px; height:200px; object-fit:cover;';
+  document.getElementById('output').before(img);
+
+  function doImageChange() {
+    count++;
+    img.style.display = 'block';
+    img.src = 'https://picsum.photos/200/200?random=' + count;
+  }
+
+  // ============================================================
+  //  RESIZE OBSERVER + HEAVY CALLBACK — ResizeObserver runs after
+  //  rAF but before paint (rendering step 14.5), so rAF timestamp
+  //  misses this work while paintTime correctly includes it.
+  // ============================================================
+  const roTarget = document.createElement('div');
+  roTarget.style.cssText = 'display:inline-block; padding:4px 10px; background:#888; color:#fff; border-radius:4px; font-size:12px; margin-top:10px;';
+  roTarget.textContent = 'ResizeObserver target';
+  document.getElementById('output').before(roTarget);
+
+  let roBusy = false;
+  new ResizeObserver(() => {
+    if (!roBusy) return;
+    roBusy = false;
+    // Burn ~50ms inside the RO callback — this runs AFTER rAF
+    // but BEFORE paint, so rAF can't see this delay.
+    const end = performance.now() + 50;
+    while (performance.now() < end) { Math.random(); }
+  }).observe(roTarget);
+
+  function doROTest() {
+    count++;
+    roBusy = true;
+    // Change size to trigger ResizeObserver in the next rendering update.
+    const p = 4 + (count % 10) * 3;
+    roTarget.style.padding = p + 'px ' + (p + 6) + 'px';
+    roTarget.style.background = count % 2 ? '#6a4c93' : '#1982c4';
+    box.textContent = 'ResizeObserver Test #' + count;
+    box.style.background = count % 2 ? '#6a4c93' : '#1982c4';
+    box.style.color = '#fff';
+  }
+
+  // ============================================================
+  //  QUEUED TASKS — simulates production scenario where macrotasks
+  //  (analytics, WebSocket handlers, etc.) are queued and run
+  //  between paint and the "rAF + setTimeout" measurement,
+  //  inflating the workaround while paintTime is unaffected.
+  // ============================================================
+  function doQueuedTasksTest() {
+    count++;
+    box.textContent = 'Queued Tasks #' + count;
+    box.style.background = count % 2 ? '#e07a5f' : '#3d405b';
+    box.style.color = '#fff';
+
+    // Schedule several macrotasks that mimic real production work
+    // landing right after paint (analytics, logging, data processing).
+    // These will run BEFORE the "rAF + setTimeout" callback,
+    // making that workaround report a time much later than actual paint.
+    for (let i = 0; i < 5; i++) {
+      setTimeout(() => {
+        // Each task burns ~20ms — simulating analytics batching,
+        // JSON parsing from a WebSocket message, etc.
+        const end = performance.now() + 20;
+        while (performance.now() < end) { Math.random(); }
+      }, 0);
+    }
+  }
+
+  // ============================================================
+  //  RUN TEST
+  // ============================================================
+  function runTest(type) {
+    raf  = {};
+
+    // 1. Apply update
+    if (type === 'style')      doStyleChange();
+    else if (type === 'image') doImageChange();
+    else if (type === 'io')    doROTest();
+    else if (type === 'queue') doQueuedTasksTest();
+    else                       doDomUpdate();
+    writeT = performance.now();
+    name   = type + '-' + count;
+
+    // 2. Mark paint time (the API under test)
+    performance.markPaintTime(name);
+
+    // 3. Capture rAF timestamps (logged later by the observer)
+    requestAnimationFrame(() => {
+      raf.single = performance.now();
+    });
+
+    requestAnimationFrame(() => {
+      setTimeout(() => { raf.setTimeout = performance.now(); }, 0);
+    });
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { raf.double = performance.now(); });
+    });
+
+    console.log('--- ' + type.toUpperCase() + ' Test #' + count + ' | write time: ' + writeT.toFixed(2) + ' ---');
+    logToPage('--- ' + type.toUpperCase() + ' Test #' + count + ' | write time: ' + writeT.toFixed(2) + ' ---', 'header');
+  }
+  </script>
+</body>
+</html>
