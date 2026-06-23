@@ -1,0 +1,446 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Paint Timing API Comparison</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f8f9fa; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .subtitle { color: #666; margin-top: 0; margin-bottom: 20px; font-size: 14px; }
+
+  /* Test buttons */
+  .test-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  button {
+    padding: 10px 16px; font-size: 13px; cursor: pointer;
+    border: 1px solid #ddd; border-radius: 6px; background: white;
+    font-weight: 500; transition: all 0.15s;
+  }
+  button:hover { background: #f0f0f0; border-color: #bbb; }
+  button.active { background: #0078d4; color: white; border-color: #0078d4; }
+  button#btn-clear { background: #fee; border-color: #fcc; color: #c00; }
+
+  /* Target area */
+  .target-area {
+    border: 1px solid #ddd; border-radius: 8px; padding: 16px;
+    margin-bottom: 20px; background: white; min-height: 120px;
+    position: relative;
+  }
+  .target-area .label {
+    position: absolute; top: -10px; left: 12px; background: white;
+    padding: 0 6px; font-size: 11px; color: #888; font-weight: 500;
+  }
+
+  /* Results table */
+  .results { margin-top: 20px; }
+  .results h3 { font-size: 15px; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0; font-weight: 600; }
+  td { padding: 8px 10px; border: 1px solid #e0e0e0; }
+  td.val { font-family: 'SF Mono', monospace; font-size: 12px; text-align: center; min-width: 100px; }
+  td.val.yes { background: #e8f5e9; color: #2e7d32; font-weight: 600; }
+  td.val.no { background: #fce4ec; color: #c62828; }
+  td.val.approx { background: #fff3e0; color: #e65100; }
+  td.val.wait { color: #999; }
+  .test-label { font-weight: 600; }
+  .test-desc { font-size: 11px; color: #666; }
+
+  /* Log */
+  #log {
+    background: #1e1e1e; color: #d4d4d4; padding: 12px;
+    border-radius: 6px; font-family: monospace; font-size: 11px;
+    max-height: 200px; overflow-y: auto; white-space: pre-wrap;
+    margin-top: 16px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Paint Timing API Comparison</h1>
+<p class="subtitle">Run each test case to compare how different APIs handle various paint scenarios.</p>
+
+<div style="margin:12px 0 20px; padding:12px 16px; background:#f8f9fa; border-radius:8px; font-size:13px; line-height:1.7; border:1px solid #e0e0e0;">
+  <b>mark({paintTiming})</b> — Imperative. Exact presentation timestamp. Works for any visual change.<br>
+  <b>Double rAF</b> — Heuristic. Not guaranteed correct frame.<br>
+  <b>Container Timing</b> — Declarative. Fires when painted area grows with new text/image. Silent on repaints, CSS, canvas, or elements without text/image.<br>
+  <b>Element Timing</b> — Declarative. First render of &lt;img&gt;/text only. Never fires on repaints or elements without text/image.
+</div>
+
+<div class="test-buttons">
+  <button onclick="runTest('basic')">1. Initial Load</button>
+  <button onclick="runTest('repaint-same')">2. Repaint Same Area</button>
+  <button onclick="runTest('repaint-extend')">3. Extend Area</button>
+  <button onclick="runTest('css-only')">4. CSS Only</button>
+  <button onclick="runTest('image-update')">5. Image Update</button>
+  <button onclick="runTest('canvas')">6. Canvas Draw</button>
+  <button onclick="runTest('input-box')">7. New Element (no text)</button>
+  <button onclick="runTest('input-text')">8. New Element (with text)</button>
+  <button id="btn-clear" onclick="clearAll()">Clear All</button>
+</div>
+
+<div class="target-area">
+  <span class="label">Target Element</span>
+  <div id="target-container">
+    <div id="persistent-target" containertiming="persistent" style="width:220px; min-height:150px; padding:16px; background:#eee; border-radius:8px; border:2px solid #ddd;">
+      <span id="target-text" elementtiming="persistent">Click "Initial Load" to start</span>
+    </div>
+    <div id="extend-area"></div>
+  </div>
+</div>
+
+<div class="results">
+  <h3>Results</h3>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:22%">Test Case</th>
+        <th style="width:19.5%">mark({paintTiming})<br><small style="font-weight:normal; color:#666;">entry.presentationTime</small></th>
+        <th style="width:19.5%">Double rAF<br><small style="font-weight:normal; color:#666;">performance.now() in 2nd rAF</small></th>
+        <th style="width:19.5%">Container Timing<br><small style="font-weight:normal; color:#666;">entry.renderTime</small></th>
+        <th style="width:19.5%">Element Timing<br><small style="font-weight:normal; color:#666;">entry.renderTime</small></th>
+      </tr>
+    </thead>
+    <tbody id="results-body">
+    </tbody>
+  </table>
+</div>
+
+<div id="log">Ready. Click a test button above.
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// Paint Timing API Comparison — Test Runner
+// ════════════════════════════════════════════════════════════════
+
+// ─── DOM References ────────────────────────────────────────────
+const box        = document.getElementById('persistent-target');
+const extendArea = document.getElementById('extend-area');
+
+// ─── State ─────────────────────────────────────────────────────
+let testCounter = 0;
+let colorIdx = 0;
+const colors = ['#e53935','#1e88e5','#43a047','#fb8c00','#8e24aa','#00acc1'];
+function nextColor() { return colors[colorIdx++ % colors.length]; }
+
+// ─── Utility Functions ─────────────────────────────────────────
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent += '\n' + msg;
+  el.scrollTop = el.scrollHeight;
+}
+
+function recordResult(testId, method, value, status, subValue) {
+  const cell = document.getElementById(`${testId}-${method}`);
+  if (cell) {
+    cell.innerHTML = value + (subValue ? `<br><small style="color:#888;">paintTime: ${subValue}</small>` : '');
+    cell.className = 'val ' + status;
+  }
+}
+
+function addResultRow(testId, label, desc) {
+  const row = document.createElement('tr');
+  row.innerHTML = `
+    <td><span class="test-label">${label}</span><br><span class="test-desc">${desc}</span></td>
+    <td class="val wait" id="${testId}-mark">...</td>
+    <td class="val wait" id="${testId}-raf">...</td>
+    <td class="val wait" id="${testId}-container">...</td>
+    <td class="val wait" id="${testId}-element">...</td>
+  `;
+  document.getElementById('results-body').appendChild(row);
+}
+
+/** Mark CT/ET cells as "Silent" if no response after 2s */
+function markTimeout(testId) {
+  setTimeout(() => {
+    ['container', 'element'].forEach(method => {
+      const cell = document.getElementById(`${testId}-${method}`);
+      if (cell && cell.textContent === '...') {
+        cell.textContent = 'Silent ❌';
+        cell.className = 'val no';
+      }
+    });
+  }, 2000);
+}
+
+/** Show the persistent box */
+function showBox() {
+  box.style.display = 'block';
+}
+
+/**
+ * Fire all measurement methods for a given test.
+ * - mark({paintTiming}): captures real compositor presentation time
+ * - Double rAF: heuristic (~16-32ms early)
+ * - CT/ET: passive, handled by observers above
+ */
+function fireAllMethods(testId) {
+  try {
+    performance.mark(testId, { paintTiming: true });
+  } catch(e) {
+    recordResult(testId, 'mark', 'N/A', 'no');
+  }
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const t = performance.now().toFixed(1);
+    log(`[rAF] ${testId}: ${t}`);
+    recordResult(testId, 'raf', t, 'approx');
+  }));
+
+  markTimeout(testId);
+}
+
+// ─── Performance Observers ─────────────────────────────────────
+
+// mark({paintTiming}) — our proposed API
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if (!entry.name.startsWith('test-')) continue;
+    const pt = entry.paintTime || 0;
+    const pres = entry.presentationTime || 0;
+    log(`[mark] ${entry.name}: paintTime=${pt.toFixed(1)}, presentationTime=${pres.toFixed(1)}`);
+    recordResult(entry.name, 'mark', pres > 0 ? pres.toFixed(1) : (pt > 0 ? pt.toFixed(1) : '0'), 'yes', pt > 0 ? pt.toFixed(1) : null);
+  }
+}).observe({ type: 'mark', buffered: true });
+
+// Container Timing — tracks text/image in containers
+try {
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      const id = entry.identifier;
+      if (!id || !id.startsWith('test-')) continue;
+      const rt = entry.renderTime || entry.startTime || 0;
+      log(`[container] ${id}: renderTime=${rt.toFixed(1)}, size=${entry.size}`);
+      recordResult(id, 'container', rt > 0 ? rt.toFixed(1) : 'N/A', rt > 0 ? 'yes' : 'no');
+    }
+  }).observe({ type: 'container', buffered: true });
+} catch(e) { log('[container] Not available: ' + e.message); }
+
+// Element Timing — tracks <img> and text with elementtiming attr
+try {
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      const id = entry.identifier;
+      if (!id || !id.startsWith('test-')) continue;
+      const rt = entry.renderTime || entry.startTime || 0;
+      log(`[element] ${id}: renderTime=${rt.toFixed(1)}`);
+      recordResult(id, 'element', rt > 0 ? rt.toFixed(1) : 'N/A', rt > 0 ? 'yes' : 'no');
+    }
+  }).observe({ type: 'element', buffered: true });
+} catch(e) { log('[element] Not available: ' + e.message); }
+
+// ─── Test Router ───────────────────────────────────────────────
+
+function runTest(type) {
+  testCounter++;
+  const testId = `test-${type}-${testCounter}`;
+
+  switch(type) {
+    case 'basic':          runInitialLoad(testId);   break;
+    case 'repaint-same':   runRepaintSame(testId);   break;
+    case 'repaint-extend': runRepaintExtend(testId); break;
+    case 'css-only':       runCssOnly(testId);       break;
+    case 'image-update':   runImageUpdate(testId);   break;
+    case 'canvas':         runCanvasDraw(testId);    break;
+    case 'input-box':      runInputBox(testId);      break;
+    case 'input-text':     runInputText(testId);     break;
+  }
+}
+
+// ─── Test Cases ────────────────────────────────────────────────
+
+// 1. Initial Load — inject fresh content into the persistent box
+//    Expected: ALL APIs fire (new text + image = CT/ET both trigger)
+function runInitialLoad(testId) {
+  addResultRow(testId, '1. Initial Load', 'Fresh text + image (all APIs should fire)');
+  log(`\n--- ${testId}: Initial Load ---`);
+
+  showBox();
+  box.setAttribute('containertiming', testId);
+  box.style.background = '#f0f7ff';
+  box.style.borderColor = '#cce';
+  box.style.boxShadow = 'none';
+  box.style.borderRadius = '8px';
+  box.style.transform = 'none';
+  box.innerHTML = `
+    <h4 style="margin:0 0 8px;" elementtiming="${testId}">Welcome to App #${testCounter}</h4>
+    <p style="margin:0; color:#555;">Fresh content with text and image.</p>
+    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='40'%3E%3Crect fill='%230078d4' width='180' height='40' rx='4'/%3E%3Ctext x='50%25' y='50%25' fill='white' text-anchor='middle' dy='.3em' font-size='12'%3ELoaded Image%3C/text%3E%3C/svg%3E"
+         elementtiming="${testId}" style="margin-top:8px; border-radius:4px;" />
+  `;
+  extendArea.innerHTML = '';
+
+  fireAllMethods(testId);
+}
+
+// 2. Repaint Same Area — update text + background color in place
+//    Expected: CT/ET silent (same area, same elements, just updated)
+function runRepaintSame(testId) {
+  addResultRow(testId, '2. Repaint Same Area', 'Update text + color in place (CT/ET silent)');
+  log(`\n--- ${testId}: Repaint Same Area ---`);
+
+  showBox();
+  box.style.background = nextColor();
+  const h4 = box.querySelector('h4');
+  if (h4) {
+    h4.textContent = `Updated text #${testCounter} at ${new Date().toLocaleTimeString()}`;
+  } else {
+    box.innerHTML = `<h4 style="margin:0;">Updated text #${testCounter}</h4>`;
+  }
+
+  fireAllMethods(testId);
+}
+
+// 3. Extend Area — add new content below (painted area grows)
+//    Expected: CT fires (area grew), ET fires (new elementtiming element)
+function runRepaintExtend(testId) {
+  addResultRow(testId, '3. Extend Area', 'Add content below (area grows, CT should fire)');
+  log(`\n--- ${testId}: Extend Area ---`);
+
+  showBox();
+  extendArea.setAttribute('containertiming', testId);
+  const newEl = document.createElement('div');
+  newEl.style.cssText = 'margin-top:8px; padding:10px; background:#e8f5e9; border-radius:4px; border:1px solid #c8e6c9;';
+  newEl.innerHTML = `<span elementtiming="${testId}">Extended block #${testCounter}</span>`;
+  extendArea.appendChild(newEl);
+
+  fireAllMethods(testId);
+}
+
+// 4. CSS Only — transform + color, NO text/image change
+//    Expected: CT/ET silent (no text or image changed)
+function runCssOnly(testId) {
+  addResultRow(testId, '4. CSS Only', 'Transform rotate + color change (CT/ET silent)');
+  log(`\n--- ${testId}: CSS Only ---`);
+
+  showBox();
+  const angle = (testCounter * 15) % 360;
+  box.style.background = nextColor();
+  box.style.transform = `rotate(${angle}deg)`;
+  box.style.boxShadow = `0 4px 20px ${nextColor()}66`;
+  box.style.borderColor = nextColor();
+
+  fireAllMethods(testId);
+}
+
+// 5. Image Update — load external image, call mark() in onload
+//    Expected: mark captures the frame where loaded image paints.
+//    NOTE: We call mark() inside img.onload so it measures the
+//    actual paint AFTER the image has downloaded, not before.
+function runImageUpdate(testId) {
+  addResultRow(testId, '5. Image Update', 'External image + mark onload (captures real image paint)');
+  log(`\n--- ${testId}: Image Update ---`);
+
+  showBox();
+  box.setAttribute('containertiming', testId);
+
+  const img = new Image();
+  img.onload = () => {
+    // Apply image AFTER it's downloaded
+    box.style.backgroundImage = `url('${img.src}')`;
+    box.style.backgroundSize = 'cover';
+    box.style.backgroundPosition = 'center';
+
+    // mark() here captures the paint frame with the actual image
+    try {
+      performance.mark(testId, { paintTiming: true });
+      log(`[mark] called after img.onload — captures real image paint frame`);
+    } catch(e) { recordResult(testId, 'mark', 'N/A', 'no'); }
+
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      log(`[rAF] ${testId}: ${performance.now().toFixed(1)}`);
+      recordResult(testId, 'raf', performance.now().toFixed(1), 'approx');
+    }));
+  };
+  img.src = `https://picsum.photos/220/150?random=${Date.now()}`;
+
+  markTimeout(testId);
+}
+
+// 6. Canvas Draw — draw bar chart on <canvas> INSIDE the tracked container
+//    Expected: CT/ET silent (canvas content is invisible to them)
+function runCanvasDraw(testId) {
+  addResultRow(testId, '6. Canvas Draw', 'Draw on canvas inside container (CT/ET silent)');
+  log(`\n--- ${testId}: Canvas Draw ---`);
+
+  showBox();
+  // Put the canvas INSIDE the persistent box (which has containertiming)
+  box.setAttribute('containertiming', testId);
+  box.style.background = '#fff';
+  box.innerHTML = `<canvas id="cv-${testCounter}" width="190" height="120" style="border:1px solid #ddd; border-radius:4px;"></canvas>`;
+
+  const canvas = document.getElementById(`cv-${testCounter}`);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = nextColor();
+  for (let i = 0; i < 5; i++) {
+    const h = Math.random() * 90 + 20;
+    ctx.fillRect(8 + i * 37, 120 - h, 30, h);
+  }
+  ctx.fillStyle = '#333';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(`Chart #${testCounter}`, 8, 14);
+
+  fireAllMethods(testId);
+}
+
+// 7. New Element (no text) — append element without text/image
+//    Expected: CT/ET silent (no text or image content)
+function runInputBox(testId) {
+  addResultRow(testId, '7. New Element (no text)', 'Append element without text/image (CT silent?)');
+  log(`\n--- ${testId}: Input Box ---`);
+
+  showBox();
+  extendArea.setAttribute('containertiming', testId);
+  const newEl = document.createElement('div');
+  newEl.style.cssText = 'margin-top:8px;';
+  newEl.innerHTML = `
+    <input type="text" placeholder="Type something..." elementtiming="${testId}"
+           style="width:180px; padding:10px; border:2px solid #0078d4; border-radius:6px; font-size:14px; outline:none;" />
+  `;
+  extendArea.appendChild(newEl);
+
+  fireAllMethods(testId);
+}
+
+// 8. New Element (with text) — append element with label text
+//    Expected: CT fires (text grows area), ET may fire (text node)
+function runInputText(testId) {
+  addResultRow(testId, '8. New Element (with text)', 'Append element with label text (CT fires for text)');
+  log(`\n--- ${testId}: Input + Text ---`);
+
+  showBox();
+  extendArea.setAttribute('containertiming', testId);
+  const newEl = document.createElement('div');
+  newEl.style.cssText = 'margin-top:8px; display:flex; align-items:center; gap:8px;';
+  newEl.innerHTML = `
+    <span elementtiming="${testId}">Message:</span>
+    <input type="text" placeholder="Type something..."
+           style="width:140px; padding:10px; border:2px solid #0078d4; border-radius:6px; font-size:14px; outline:none;" />
+  `;
+  extendArea.appendChild(newEl);
+
+  fireAllMethods(testId);
+}
+
+// ─── Reset ─────────────────────────────────────────────────────
+
+function clearAll() {
+  document.getElementById('results-body').innerHTML = '';
+  document.getElementById('log').textContent = 'Cleared. Click a test button above.';
+  showBox();
+  box.style.background = '#eee';
+  box.style.borderColor = '#ddd';
+  box.style.borderRadius = '8px';
+  box.style.boxShadow = 'none';
+  box.style.transform = 'none';
+  box.style.backgroundImage = 'none';
+  box.innerHTML = '<span>Click "1. Initial Load" to start</span>';
+  extendArea.innerHTML = '';
+  testCounter = 0;
+  colorIdx = 0;
+}
+</script>
+</body>
+</html>
